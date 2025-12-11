@@ -1,0 +1,89 @@
+library("zCompositions")
+library("phyloseq")
+library("dplyr")
+library("mice")
+library(haven)
+library("vegan")
+library("ggplot2")
+library(writexl)
+library(gridExtra)
+library(cowplot)
+
+#### BETA CASE CONTROL ####
+# load datasets
+set.seed(123)
+ps <- readRDS('phyloseq_casecontrol_alpha_fin.rds')
+# zero imputation of zero abundances in OTU table
+matrixdf <- ps@otu_table
+matrixdf<-as.matrix(matrixdf)
+
+# check if there are ASVs with only zeroes -> to delete
+col_sums <- colSums(matrixdf)
+# Identify columns with colsum of 0
+zero_col_indices <- which(col_sums == 0) 
+# Zero imputation
+d.czm <- cmultRepl(matrixdf,  label=0, method="CZM", z.delete = FALSE) 
+View(d.czm) # new OTU table with zero imputation
+
+#create new phyloseq with newly imputed OTU table
+OTU <- as.matrix(d.czm)
+OTU <- otu_table(OTU, taxa_are_rows = FALSE) #taxa are columns
+# Replace the existing OTU table in the phyloseq object
+physeq_t = merge_phyloseq(ps, OTU)
+# for trial permanova and for beta div unadjusted visualizations, make sampledata a dataframe
+metadata = physeq_t@sam_data
+metadatadf = data.frame(metadata)
+class(metadatadf)
+
+## Bray Curtis##
+bc_dist <- phyloseq::distance(physeq_t, method = "bray")
+# Ordination with Principal Coordinate Analysis
+bc.ordu = ordinate(physeq_t, method="PCoA", distance="bc_dist")
+# Check if rownames match between distance matrix and meta df
+all(rownames(bc.ordu) == rownames(metadatadf)) # TRUE = matched
+#  plot Bray Curtis
+pcoa_bc_plot <- plot_ordination(physeq_t, bc.ordu, color="Lesi.Non.Lesi") + 
+  theme_bw() + 
+  stat_ellipse() + 
+  ggtitle("Bray-Curtis in AD cases and controls") +
+  scale_color_manual(values = c("#5f6f52", "#c45555"),
+                     labels = c("Controls", "Cases")) +
+  theme_bw() +  # Set a white background
+  theme(
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank(), # Remove minor gridlines
+    legend.title = element_blank() 
+  )
+pcoa_bc_plot
+
+
+### PERMANOVA unadjusted and adjusted with Bray curtis###
+# calculate distance matrix with Bray Curtis for input PERMANOVA
+braycurtis.dist <- as.matrix(bc_dist)
+# Check if row names match between distance matrix and meta_df
+all(rownames(braycurtis.dist) == rownames(metadatadf)) # TRUE
+# Unadjusted
+permanova_skintype <- adonis2(braycurtis.dist ~ Skin.Type, data = metadatadf)
+permanova_age <- adonis2(braycurtis.dist ~ Age.years, data = metadatadf) # R2 0.8% & significant (p=0.02)
+permanova_fathereducation <- adonis2(braycurtis.dist ~ Father.education, data = metadatadf) #R2 1.58% and significant (P=0.001)
+permanova_BMI <- adonis2(braycurtis.dist ~ BMI.Group, data = metadatadf)
+permanova_mothereducation <- adonis2(braycurtis.dist ~ Mother.education, data = metadatadf) #R2 1.68% & significant (P=0.001)
+permanova_familyincome <- adonis2(braycurtis.dist ~ Family.income, data = metadatadf) #R2 1.95% & significant (p=0.001)
+permanova_gestationalage <- adonis2(braycurtis.dist ~ Gestational.Age, data = metadatadf)
+permanova_birthmethods <- adonis2(braycurtis.dist ~ Birth.Methods, data = metadatadf)
+permanova_exclusivebreastfeed <- adonis2(braycurtis.dist ~ Exclusive.Breastfeed, data = metadatadf)
+permanova_feedinghabit <- adonis2(braycurtis.dist ~ Feeding.Habit, data = metadatadf) 
+permanova_atopymother <- adonis2(braycurtis.dist ~ ATOPY.Mother, data = metadatadf) #R2 1.63% & significant (p=0.001)
+permanova_atopyfather <- adonis2(braycurtis.dist ~ ATOPY.Father, data = metadatadf) #R2 1.04% and significant (P=0.002)
+permanova_cases <- adonis2(braycurtis.dist ~ Lesi.Non.Lesi, data = metadatadf) #R2 3.40% & significant (p=0.001)
+permanova_DNAconc <- adonis2(braycurtis.dist ~ DNA.concentration, data = metadatadf) #R2 1.94% & significant (p=0.001)
+# use terms instead of margin to correct for all exposures 
+permanova <- adonis2(braycurtis.dist ~ Lesi.Non.Lesi, data = metadatadf) 
+adjusted_AD <- adonis2(braycurtis.dist~ Age.years + Mother.education + Father.education + Family.income +  
+                         ATOPY.Mother + ATOPY.Father + DNA.concentration + Lesi.Non.Lesi,data=metadatadf, permutations=1000,
+                       by = "terms") 
+permanova_AD <- cbind(adjusted_AD)
+permanova_AD$Variable <- rownames(permanova_AD)
+permanova_AD <- permanova_AD[, c("Variable", setdiff(names(permanova_AD), "Variable"))]
+write_xlsx(permanova_AD, "permanova_AD_bray_multivar_finrae.xlsx")
+
