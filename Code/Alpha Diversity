@@ -1,0 +1,388 @@
+library(statsExpressions)
+library(phyloseq)
+library(ggstatsplot)
+library(vegan)
+library(haven)
+library(dplyr)
+library(ggplot2)
+library(microbiome)
+library(viridis)
+library(ggpubr)
+library(dunn.test)
+library(rstatix)
+library(gridGraphics)
+library("writexl")
+
+#load datasets
+# total
+ps.filter.prev<- readRDS('ps.filter.prev.rds')  
+#subsets
+subset_case_control <- readRDS('phyloseq_case_controlfin.rds')
+subset_lesion_nonlesion <- readRDS('phyloseq_lesion_nonlesionfin.rds')
+subset_TSD <- readRDS('phyloseq_TSD.rds')
+#### ALPHA DIVERSITY: Chao1 and Shannon ####
+alpha <- estimate_richness(subset_case_control, split = TRUE, measures = c("Chao1", 
+                                                                           "Shannon", "Simpson")) 
+#bind metadata to alpha measures
+ps.meta <- subset_case_control@sam_data
+ps.meta <- as.data.frame(ps.meta)
+ps.meta.alpha <- merge(ps.meta, alpha, by = "row.names")
+sum(is.na(ps.meta.alpha$Chao1)) # for all samples outcomes are included
+# bind metadata with alpha measures to existing phyloseq
+rownames(ps.meta.alpha) <- ps.meta.alpha$Row.names
+ps.meta.alpha<-ps.meta.alpha[,c(-1)]
+sampledata = sample_data(ps.meta.alpha)
+sample_names(ps.meta.alpha) = row.names(ps.meta.alpha)
+case_control_alpha = merge_phyloseq(subset_case_control, sampledata)
+View(sample_data(case_control_alpha))
+saveRDS(case_control_alpha, 'phyloseq_casecontrol_alpha_fin.rds')
+
+## plot alpha diversity separated by Group (Chao, Shannon)
+x <- plot_richness(subset_case_control, "Lesi.Non.Lesi", measures = c("Chao1", "Shannon"), color = "Lesi.Non.Lesi") +
+  geom_boxplot() +
+  labs(title = "Alpha diversity in AD controls and cases", color = "", x = "AD control or case") +
+  scale_color_manual(values = c("#5f6f52", "#c45555")) +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank()   # Remove minor gridlines
+  )
+x
+# saved univariable boxplots 
+
+#### Linear regressions ####
+# univariable for Chao1, shannon
+# CHAO1 univar
+Uni_Chao1 <- lm(Chao1 ~ Lesi.Non.Lesi, data = ps.meta.alpha)
+sum_uni_chao1 <- summary(Uni_Chao1, conf.int=TRUE)
+p_values <- coef(sum_uni_chao1)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_uni_chao1))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Uni_Chao1)
+results <- cbind(results, conf_int)
+print(results)
+
+#CHAO1 multivar 
+Multi_Chao1 <- lm(Chao1 ~ Lesi.Non.Lesi + Age.years + Father.education +
+                    Mother.education + Family.income +
+                    Birth.Methods + Exclusive.Breastfeed + Feeding.Habit +ATOPY.Mother + ATOPY.Father + 
+                    DNA.concentration + TotalReads_log, data = ps.meta.alpha)
+sum_multi_chao1 <- summary(Multi_Chao1, conf.int=TRUE)
+p_values <- coef(sum_multi_chao1)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_multi_chao1))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Multi_Chao1)
+results <- cbind(results, conf_int)
+print(results)
+results$Variable <- rownames(results)
+results <- results[, c("Variable", setdiff(names(results), "Variable"))]
+write_xlsx(results, "chao1_multivar_fin.xlsx")
+
+# SHANNON univar for AD cases
+Uni_Shannon <- lm(Shannon ~ Lesi.Non.Lesi, data = ps.meta.alpha)
+sum_uni_Shannon <- summary(Uni_Shannon, conf.int=TRUE)
+p_values <- coef(sum_uni_Shannon)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_uni_Shannon))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Uni_Shannon)
+results <- cbind(results, conf_int)
+print(results)
+
+#Shannon multivar
+Multi_Shannon <- lm(Shannon ~ Lesi.Non.Lesi + Age.years + Father.education +
+                      Mother.education + Family.income +
+                      Birth.Methods + Exclusive.Breastfeed + Feeding.Habit +ATOPY.Mother + ATOPY.Father + 
+                      DNA.concentration + TotalReads_log, data = ps.meta.alpha)
+sum_multi_Shannon <- summary(Multi_Shannon, conf.int=TRUE)
+p_values <- coef(sum_multi_Shannon)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_multi_Shannon))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Multi_Shannon)
+results <- cbind(results, conf_int)
+print(results)
+results$Variable <- rownames(results)
+results <- results[, c("Variable", setdiff(names(results), "Variable"))]
+write_xlsx(results, "Shannon_multivar_fin.xlsx")
+
+
+#### Sensitivity analysis for AD ###
+# A.Severity
+subset_severity <- prune_samples(
+  sample_data(ps.filter.prev)$Lesi.Non.Lesi == "Lesional" &
+    sample_data(ps.filter.prev)$Severity.SCORAD %in% c("mild", "moderate", "severe"),
+  ps.filter.prev
+)
+subset_severity
+#### ALPHA DIVERSITY: Chao1 and Shannon ####
+alpha <- estimate_richness(subset_severity, split = TRUE, measures = c("Chao1", 
+                                                                           "Shannon", "Simpson")) 
+#bind metadata to alpha measures
+ps.meta <- subset_severity@sam_data
+ps.meta <- as.data.frame(ps.meta)
+ps.meta.alpha <- merge(ps.meta, alpha, by = "row.names")
+sum(is.na(ps.meta.alpha$Chao1)) # for all samples outcomes are included
+# bind this metadata with alpha measures to existing phyloseq
+rownames(ps.meta.alpha) <- ps.meta.alpha$Row.names
+ps.meta.alpha<-ps.meta.alpha[,c(-1)]
+sampledata = sample_data(ps.meta.alpha)
+sample_names(ps.meta.alpha) = row.names(ps.meta.alpha)
+severity_alpha = merge_phyloseq(subset_severity, sampledata)
+View(sample_data(severity_alpha))
+saveRDS(severity_alpha, 'phyloseq_severity_alpha_fin.rds')
+
+## plot alpha diversity separated by Group (Chao, Shannon)
+x <- plot_richness(subset_severity, "Severity.SCORAD.", measures = c("Chao1", "Shannon"), color = "Lesi.Non.Lesi") +
+  geom_boxplot() +
+  labs(title = "Alpha diversity across AD severity", color = "", x = "AD Severity") +
+  scale_color_manual(values = c("#5f6f52", "#c45555")) +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank(),   # Remove minor gridlines
+    legend.position = "none")
+x
+# saved univariable boxplots 
+
+#### Linear regressions####
+# univariable for Chao1, shannon
+# CHAO1 univar
+Uni_Chao1 <- lm(Chao1 ~ Severity.SCORAD., data = ps.meta.alpha)
+sum_uni_chao1 <- summary(Uni_Chao1, conf.int=TRUE)
+p_values <- coef(sum_uni_chao1)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_uni_chao1))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Uni_Chao1)
+results <- cbind(results, conf_int)
+print(results)
+
+#CHAO1 multivar 
+Multi_Chao1 <- lm(Chao1 ~ Severity.SCORAD. + Age.years + Father.education +
+                    Mother.education + Family.income +
+                    Birth.Methods + Exclusive.Breastfeed + Feeding.Habit +ATOPY.Mother + ATOPY.Father + 
+                    DNA.concentration, data = ps.meta.alpha)
+sum_multi_chao1 <- summary(Multi_Chao1, conf.int=TRUE)
+p_values <- coef(sum_multi_chao1)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_multi_chao1))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Multi_Chao1)
+results <- cbind(results, conf_int)
+print(results)
+results$Variable <- rownames(results)
+results <- results[, c("Variable", setdiff(names(results), "Variable"))]
+write_xlsx(results, "chao1_multivar_severity_fin.xlsx")
+
+# SHANNON univar for AD Severity
+Uni_Shannon <- lm(Shannon ~ Severity.SCORAD., data = ps.meta.alpha)
+sum_uni_Shannon <- summary(Uni_Shannon, conf.int=TRUE)
+p_values <- coef(sum_uni_Shannon)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_uni_Shannon))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Uni_Shannon)
+results <- cbind(results, conf_int)
+print(results)
+
+#Shannon multivar
+Multi_Shannon <- lm(Shannon ~ Severity.SCORAD. + Age.years + Father.education +
+                      Mother.education + Family.income +
+                      Birth.Methods + Exclusive.Breastfeed + Feeding.Habit +ATOPY.Mother + ATOPY.Father + 
+                      DNA.concentration, data = ps.meta.alpha)
+sum_multi_Shannon <- summary(Multi_Shannon, conf.int=TRUE)
+p_values <- coef(sum_multi_Shannon)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_multi_Shannon))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Multi_Shannon)
+results <- cbind(results, conf_int)
+print(results)
+results$Variable <- rownames(results)
+results <- results[, c("Variable", setdiff(names(results), "Variable"))]
+write_xlsx(results, "Shannon_multivar_severity_fin.xlsx")
+
+
+#### B) TSD dataset
+#### ALPHA DIVERSITY: Chao1 and Shannon ####
+alpha <- estimate_richness(subset_TSD, split = TRUE, measures = c("Chao1", 
+                                                                           "Shannon", "Simpson")) 
+#bind metadata to alpha measures
+ps.meta <- subset_TSD@sam_data
+ps.meta <- as.data.frame(ps.meta)
+ps.meta.alpha <- merge(ps.meta, alpha, by = "row.names")
+sum(is.na(ps.meta.alpha$Chao1)) # for all samples outcomes are included
+# bind this metadata with alpha measures to existing phyloseq
+rownames(ps.meta.alpha) <- ps.meta.alpha$Row.names
+ps.meta.alpha<-ps.meta.alpha[,c(-1)]
+sampledata = sample_data(ps.meta.alpha)
+sample_names(ps.meta.alpha) = row.names(ps.meta.alpha)
+TSD_alpha = merge_phyloseq(subset_TSD, sampledata)
+View(sample_data(TSD_alpha))
+saveRDS(TSD_alpha, 'phyloseq_TSD_alpha_fin.rds')
+
+## plot alpha diversity separated by Group (Chao, Shannon)
+x <- plot_richness(subset_TSD, "Toilet.seat.dermatitis", measures = c("Chao1", "Shannon"), color = "Toilet.seat.dermatitis") +
+  geom_boxplot() +
+  labs(title = "Alpha diversity in AD by Toilet Seat Dermatitis status", color = "Toilet Seat Dermatitis", x = "Toilet Seat Dermatitis") +
+  scale_color_manual(values = c("#5f6f52", "#c45555")) +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank()   # Remove minor gridlines
+  )
+x
+# saved univariable boxplots
+
+#### Linear regressions####
+# univariable for Chao1, shannon\
+# CHAO1 univar
+Uni_Chao1 <- lm(Chao1 ~ Toilet.seat.dermatitis, data = ps.meta.alpha)
+sum_uni_chao1 <- summary(Uni_Chao1, conf.int=TRUE)
+p_values <- coef(sum_uni_chao1)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_uni_chao1))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Uni_Chao1)
+results <- cbind(results, conf_int)
+print(results)
+
+#CHAO1 multivar 
+Multi_Chao1 <- lm(Chao1 ~ Toilet.seat.dermatitis + Age.years + Father.education +
+                    Mother.education + Family.income +
+                    Birth.Methods + Exclusive.Breastfeed + Feeding.Habit +ATOPY.Mother + ATOPY.Father + 
+                    DNA.concentration + TotalReads_log, data = ps.meta.alpha)
+sum_multi_chao1 <- summary(Multi_Chao1, conf.int=TRUE)
+p_values <- coef(sum_multi_chao1)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_multi_chao1))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Multi_Chao1)
+results <- cbind(results, conf_int)
+print(results)
+results$Variable <- rownames(results)
+results <- results[, c("Variable", setdiff(names(results), "Variable"))]
+write_xlsx(results, "chao1_multivar_finTSD.xlsx")
+
+# SHANNON univar for TSD
+Uni_Shannon <- lm(Shannon ~ Toilet.seat.dermatitis, data = ps.meta.alpha)
+sum_uni_Shannon <- summary(Uni_Shannon, conf.int=TRUE)
+p_values <- coef(sum_uni_Shannon)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_uni_Shannon))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Uni_Shannon)
+results <- cbind(results, conf_int)
+print(results)
+
+#Shannon multivar
+Multi_Shannon <- lm(Shannon ~ Toilet.seat.dermatitis + Age.years + Father.education +
+                      Mother.education + Family.income +
+                      Birth.Methods + Exclusive.Breastfeed + Feeding.Habit +ATOPY.Mother + ATOPY.Father + 
+                      DNA.concentration + TotalReads_log, data = ps.meta.alpha)
+sum_multi_Shannon <- summary(Multi_Shannon, conf.int=TRUE)
+p_values <- coef(sum_multi_Shannon)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_multi_Shannon))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Multi_Shannon)
+results <- cbind(results, conf_int)
+print(results)
+results$Variable <- rownames(results)
+results <- results[, c("Variable", setdiff(names(results), "Variable"))]
+write_xlsx(results, "Shannon_multivar_finTSD.xlsx")
+
+
+
+#### C. lesional and nonlesional dataset
+#### ALPHA DIVERSITY: Chao1 and Shannon ####
+alpha <- estimate_richness(subset_lesion_nonlesion, split = TRUE, measures = c("Chao1", 
+                                                                               "Shannon", "Simpson"))
+#bind metadata to alpha measures
+ps.meta <- subset_lesion_nonlesion@sam_data
+ps.meta <- as.data.frame(ps.meta)
+ps.meta.alpha <- merge(ps.meta, alpha, by = "row.names")
+sum(is.na(ps.meta.alpha$Chao1)) # for all samples outcomes are included
+# bind this metadata with alpha measures to existing phyloseq
+rownames(ps.meta.alpha) <- ps.meta.alpha$Row.names
+ps.meta.alpha<-ps.meta.alpha[,c(-1)]
+sampledata = sample_data(ps.meta.alpha)
+sample_names(ps.meta.alpha) = row.names(ps.meta.alpha)
+lesion_nonlesion_alpha = merge_phyloseq(subset_lesion_nonlesion, sampledata)
+View(sample_data(lesion_nonlesion_alpha))
+saveRDS(lesion_nonlesion_alpha, 'phyloseq_lesionnonlesion_alpha_fin.rds')
+
+## plot alpha diversity separated by Group (Chao, Shannon)
+x <- plot_richness(subset_lesion_nonlesion, "Lesi.Non.Lesi", measures = c("Chao1", "Shannon"), color = "Lesi.Non.Lesi") +
+  geom_boxplot() +
+  labs(title = "Alpha diversity in lesional and nonlesional skin AD cases", color = "", x = "AD control or case") +
+  scale_color_manual(values = c("#5f6f52", "#c45555")) +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank()   # Remove minor gridlines
+  )
+x
+# saved univariable boxplots 
+
+#### Linear regressions####
+Uni_Chao1 <- lm(Chao1 ~ Lesi.Non.Lesi, data = ps.meta.alpha)
+sum_uni_chao1 <- summary(Uni_Chao1, conf.int=TRUE)
+p_values <- coef(sum_uni_chao1)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_uni_chao1))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Uni_Chao1)
+results <- cbind(results, conf_int)
+print(results)
+
+#CHAO1 multivar 
+Multi_Chao1 <- lm(Chao1 ~ Lesi.Non.Lesi + Age.years + Father.education +
+                    Mother.education + Family.income +
+                    Birth.Methods + Exclusive.Breastfeed + Feeding.Habit + ATOPY.Mother + ATOPY.Father + 
+                    DNA.concentration + TotalReads_log, data = ps.meta.alpha)
+sum_multi_chao1 <- summary(Multi_Chao1, conf.int=TRUE)
+p_values <- coef(sum_multi_chao1)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_multi_chao1))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Multi_Chao1)
+results <- cbind(results, conf_int)
+print(results)
+results$Variable <- rownames(results)
+results <- results[, c("Variable", setdiff(names(results), "Variable"))]
+write_xlsx(results, "chao1_multivar_lesionnonlesion_fin2.xlsx")
+
+
+# SHANNON univar for lesional skin
+Uni_Shannon <- lm(Shannon ~ Lesi.Non.Lesi, data = ps.meta.alpha)
+sum_uni_Shannon <- summary(Uni_Shannon, conf.int=TRUE)
+p_values <- coef(sum_uni_Shannon)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_uni_Shannon))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Uni_Shannon)
+results <- cbind(results, conf_int)
+print(results)
+
+#Shannon multivar
+Multi_Shannon <- lm(Shannon ~ Lesi.Non.Lesi + Age.years + Father.education +
+                      Mother.education + Family.income +
+                      Birth.Methods + Exclusive.Breastfeed + Feeding.Habit + ATOPY.Mother + ATOPY.Father + 
+                      DNA.concentration + TotalReads_log, data = ps.meta.alpha)
+sum_multi_Shannon <- summary(Multi_Shannon, conf.int=TRUE)
+p_values <- coef(sum_multi_Shannon)[, "Pr(>|t|)"]
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+results <- as.data.frame(coef(sum_multi_Shannon))
+results$adjusted_p_value <- adjusted_p_values
+conf_int <- confint(Multi_Shannon)
+results <- cbind(results, conf_int)
+print(results)
+results$Variable <- rownames(results)
+results <- results[, c("Variable", setdiff(names(results), "Variable"))]
+write_xlsx(results, "Shannon_multivar_lesionnonlesion_fin2.xlsx")
+
+
