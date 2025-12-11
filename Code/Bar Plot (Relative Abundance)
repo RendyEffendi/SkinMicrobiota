@@ -1,0 +1,500 @@
+library(phyloseq)
+library(phangorn)
+library(ggstatsplot)
+library(vegan)
+library(haven)
+library(dplyr)
+library(ggplot2)
+library(microbiome)
+library(tidyverse)
+library("hrbrthemes")
+library('gcookbook')
+library(viridis)
+library(pheatmap)
+library(gridGraphics)
+library(reshape2)
+library(cowplot)
+
+#nice colors
+library(RColorBrewer)
+theme_set(theme_bw()) #default theme for ggplot graphics
+nb.cols <- 20
+mycolors <- colorRampPalette(brewer.pal(8, "Set3"))(nb.cols)
+
+#load physeq data 
+ps.filter.prev<- readRDS('ps.filter.prev.rds')  
+View(sample_data(ps.filter.prev))
+hist(sample_data(ps.filter.prev)$TotalReads) #skewed, log trans
+sample_data(ps.filter.prev)$TotalReads_log <- log(sample_data(ps.filter.prev)$TotalReads)
+hist(sample_data(ps.filter.prev)$TotalReads_log) #better
+
+## Subset to exclude non lesional## 
+table(sample_data(ps.filter.prev)$Lesi.Non.Lesi) 
+subset_case_control <- prune_samples(!sample_data(ps.filter.prev)$Lesi.Non.Lesi == "Non-lesional", ps.filter.prev) 
+subset_case_control 
+table(sample_data(subset_case_control)$Lesi.Non.Lesi) 
+table(sample_data(ps.filter.prev)$Lesi.Non.Lesi) 
+subset_lesion_nonlesion <- prune_samples(!sample_data(ps.filter.prev)$Lesi.Non.Lesi == "Controls", ps.filter.prev) 
+subset_lesion_nonlesion # from 311 to 210 samples
+table(sample_data(subset_lesion_nonlesion)$Lesi.Non.Lesi) #101 non lesional, 109 lesional
+
+#SUBSET for toilet seat dermatitis
+subset_TSD <- prune_samples(
+  sample_data(ps.filter.prev)$Lesi.Non.Lesi == "Lesional" &
+    sample_data(ps.filter.prev)$Toilet.seat.dermatitis %in% c("yes", "no"),
+  ps.filter.prev
+)
+subset_TSD
+ps_staph_filtered <- subset_taxa(ps_staph_filtered, Genus == "Staphylococcus")
+
+#SUBSET Staphylococcus only
+newtax_staph <- read.csv(directory/staphtaxa_blast.csv",row.names = 1)
+head(newtax_staph)
+tax_matrix <- as.matrix(newtax_staph)
+tax_table_obj <- tax_table(tax_matrix)
+asv_table <- otu_table(ps.filter.prev)
+ps_staph_filtered <- phyloseq(
+  otu_table(asv_table, taxa_are_rows = TRUE), 
+  tax_table(as.matrix(newtax_staph)), 
+  phy_tree(ps.filter.prev), 
+  sample_data(ps.filter.prev)  
+)
+length(taxa_names(ps_staph_filtered)) 
+ps_staph_filtered
+mphyseq <- psmelt(ps_staph_filtered)
+# Check the unique species in the dataset
+unique(mphyseq$Species)
+# Inspect the species column in the taxonomy table
+head(newtax_staph[, "Species"])
+
+#save phyloseqs
+saveRDS(subset_case_control, 'phyloseq_case_controlfin.rds')
+saveRDS(subset_lesion_nonlesion, 'phyloseq_lesion_nonlesionfin.rds')
+saveRDS(subset_TSD, 'phyloseq_TSD.rds')
+saveRDS(ps_staph_filtered, 'ps_staph_filtered.rds')
+
+################ Relative abundances cases vs controls and lesion vs non lesion phylum and genus #############
+# recode the factors for correct view in plots
+# for case control, recode lesional to case 
+sample_data(subset_case_control)$Lesi.Non.Lesi <- recode(sample_data(subset_case_control)$Lesi.Non.Lesi, 
+                                                         "Lesional" = "AD cases")
+table(sample_data(subset_case_control)$Lesi.Non.Lesi)
+ps1.rel.t <- microbiome::transform(subset_case_control, "compositional")
+#make data frame
+sdf <- data.frame(sample_data(ps1.rel.t))
+
+# N for case vs control (Lesi.Non.Lesi)
+n_casecontrol <- sdf %>%
+  count(Lesi.Non.Lesi, name = "N")
+
+# N for AD severity 
+n_severity <- sdf %>%
+  filter(!is.na(Severity.SCORAD.)) %>% 
+  count(Severity.SCORAD., name = "N")
+
+n_severity
+#control the order into mild,moderate,severe
+n_severity$Severity.SCORAD. <- factor(
+  n_severity$Severity.SCORAD.,
+  levels = sort(unique(n_severity$Severity.SCORAD.))  # or c("Mild","Moderate","Severe")
+)
+
+# phylum level
+ps1.fam.rel.p <-aggregate_rare(ps1.rel.t, level = "Phylum", detection = 0.005, prevalence = 0.2) 
+#saved plot with 0.2 prev
+# case vs control
+p <- plot_composition(ps1.fam.rel.p,
+                      average_by = "Lesi.Non.Lesi") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "", 
+       y = "Relative abundance",
+       title = "Relative abundance in cases (lesional skin) and controls (forearm) at phylum level") +
+  scale_fill_manual("Phylum", values=mycolors) + 
+  theme_bw() +  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +  
+  geom_text(
+    data = n_casecontrol,
+    aes(x = Lesi.Non.Lesi, y = 1.02, label = paste0("N = ", N)),
+    inherit.aes = FALSE,
+    size = 3
+  )
+p
+#save plot
+ggsave("relative_abundance_casecontrol_phylum.png", p, width = 7, height = 6)
+
+# genus level
+ps1.fam.rel.g <-aggregate_rare(ps1.rel.t, level = "Genus", detection = 0.01, prevalence = 0.2)
+# case vs control
+g <- plot_composition(ps1.fam.rel.g,
+                      average_by = "Lesi.Non.Lesi") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "", 
+       y = "Relative abundance",
+       title = "Relative abundance in cases (lesional skin) and controls (forearm) at genus level") +
+  scale_fill_manual("Genus", values=mycolors) + 
+  theme_bw() +  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()
+) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  geom_text(
+    data = n_casecontrol,
+    aes(x = Lesi.Non.Lesi, y = 1.02, label = paste0("N = ", N)),
+    inherit.aes = FALSE,
+    size = 3
+  )
+g
+#save plot
+ggsave("relative_abundance_casecontrol_genus.png", g, width = 7, height = 6)
+
+#genus level AD severity
+severity <- plot_composition(ps1.fam.rel.g,
+                             average_by = "Severity.SCORAD.") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "AD severity", 
+       y = "Relative abundance",
+       title = "Relative abundance per atopic dermatitis severity category at genus level") +
+  scale_fill_manual("Genus", values=mycolors) + 
+  theme_bw() +  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  geom_text(
+    data = n_severity,
+    aes(x = Severity.SCORAD., y = 1.02, label = paste0("N = ", N)),
+    inherit.aes = FALSE,
+    size = 3
+  )
+severity
+#save plot
+ggsave("relative_abundance_adseverity_genus.png", severity, width = 7, height = 6)
+
+###combined plot of phylum genus + severity
+p_combined <- p + 
+  theme(
+    plot.title = element_text(hjust = 0.2, size = 11, face = "bold", margin = margin(t =20, b = 5)),
+    plot.margin = margin(20, 10, 10, 10) 
+  )
+
+g_combined <- g + 
+  theme(
+    plot.title = element_text(hjust = 0.2, size = 11, face = "bold", margin = margin(t = 20, b = 5)),
+    plot.margin = margin(20, 10, 10, 10)
+  )
+
+severity_combined <- severity +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 11, face = "bold", margin = margin(t = 10, b = 5)),
+    plot.margin = margin(20, 10, 10, 10)
+  )
+
+# First row: p and g side-by-side
+pg_row <- plot_grid(
+  p_combined, g_combined,
+  labels = c("(A)", "(B)"),
+  ncol = 2,
+  align = "h",
+  rel_widths = c(1, 1)
+)
+
+# Second row: severity 
+severity_centered <- plot_grid(NULL, severity_combined, NULL, ncol = 3, rel_widths = c(0.2, 0.6, 0.2))
+
+# Combine plot
+combined_pgs <- plot_grid(
+  pg_row,
+  plot_grid(severity_centered, labels = "(C)", ncol = 1),
+  ncol = 1,
+  rel_heights = c(1, 1)
+)
+# save plot
+ggsave(
+  filename = "Combined_relative_abundance_phylum_genus_severity.jpg",
+  plot = combined_pgs,
+  width = 14,       
+  height = 10,     
+  dpi = 600,       
+  device = "jpeg"   
+)
+
+##For swab sites## --> For supplementary
+# for case control, recode lesional to case 
+sample_data(subset_case_control)$Swab.Sites <- recode(sample_data(subset_case_control)$Swab.Sites, 
+                                                         "Lesional" = "AD cases")
+table(sample_data(subset_case_control)$Swab.Sites)
+# for Swab Sites dataset 
+
+ps1.rel.t <- microbiome::transform(subset_case_control, "compositional")
+
+# phylum level
+ps1.fam.rel.p <-aggregate_rare(ps1.rel.t, level = "Phylum", detection = 0.005, prevalence = 0.2) 
+#saved plot with 0.2 prev, can also switch to 0.1
+# case vs control
+p <- plot_composition(ps1.fam.rel.p,
+                      average_by = "Swab.Sites") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "", 
+       y = "Relative abundance",
+       title = "Relative abundance at phylum level by swab site in AD Cases and Controls") +
+  scale_fill_manual("Phylum", values=mycolors) + 
+  theme_bw() +  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+p
+#save plot
+ggsave("relative_abundance_casecontrol_phylum.png", p, width = 7, height = 6)
+
+# genus level
+ps1.fam.rel.g <-aggregate_rare(ps1.rel.t, level = "Genus", detection = 0.01, prevalence = 0.2)
+# when switching the detection from 0.005 to 0.01, it makes a large difference in plot
+# case vs control
+g <- plot_composition(ps1.fam.rel.g,
+                      average_by = "Swab.Sites") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "", 
+       y = "Relative abundance",
+       title = "Relative abundance at genus level by swab site in AD Cases and Controls") +
+  scale_fill_manual("Genus", values=mycolors) + 
+  theme_bw() +  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+g
+###combined plot of phylum + genus
+p_combined <- p + 
+  theme(
+    plot.title = element_text(hjust = 0.2, size = 11, face = "bold", margin = margin(t = 10, b = 5)),
+    plot.margin = margin(20, 10, 10, 10) 
+  )
+
+g_combined <- g + 
+  theme(
+    plot.title = element_text(hjust = 0.2, size = 11, face = "bold", margin = margin(t = 10, b = 5)),
+    plot.margin = margin(20, 10, 10, 10)
+  )
+
+
+# First row: p and g stacked vertically (not side-by-side)
+pg_row <- plot_grid(
+  p_combined, 
+  g_combined,
+  labels = c("(A)", "(B)"),
+  ncol = 1,              # changed from ncol = 2
+  align = "v",           # vertical alignment
+  rel_heights = c(1, 1)  # optional but helps balance layout
+)
+
+# Final combined plot
+combined_pg <- pg_row
+combined_pg
+# save plot
+ggsave(
+  filename = "Combined_relative_abundance_swabsitephylum_genus.jpg",
+  plot = combined_pg,
+  width = 14,       
+  height = 10,     
+  dpi = 1200,       
+  device = "jpeg"   
+)
+
+###lesion vs non lesion in AD cases###
+ps1.rel.l <- microbiome::transform(subset_lesion_nonlesion, "compositional")
+# phylum level
+ps1.fam.rel.lp <-aggregate_rare(ps1.rel.l, level = "Phylum", detection = 0.005, prevalence = 0.2) 
+#saved plot with 0.2 prev, can also switch to 0.1
+lp <- plot_composition(ps1.fam.rel.lp,
+                       average_by = "Lesi.Non.Lesi") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "Lesion and non lesional skin in AD cases", 
+       y = "Relative abundance",
+       title = "Relative abundance in lesion and non lesional skin in AD cases at phylum level") +
+  scale_fill_manual("Phylum", values=mycolors) + 
+  theme_bw() +  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+#save plot
+lp
+ggsave("relative_abundance_lesionnonlesion_phylum.png", lp, width = 7, height = 6)
+
+#genus
+ps1.fam.rel.lg <-aggregate_rare(ps1.rel.l, level = "Genus", detection = 0.01, prevalence = 0.2) 
+# when switching the detection from 0.005 to 0.01, it makes a large difference in plot
+lg <- plot_composition(ps1.fam.rel.lg,
+                       average_by = "Lesi.Non.Lesi") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "Lesion and non lesional skin in AD cases", 
+       y = "Relative abundance",
+       title = "Relative abundance in lesion and non lesional skin in AD cases at genus level") +
+  scale_fill_manual("Genus", values=mycolors) + 
+  theme_bw() +  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+lg
+#save plot
+ggsave("relative_abundance_lesionnonlesion_genus_fin.png", lg, width = 7, height = 6)
+
+
+###Toilet seat dermatitis###
+################ Relative abundances toilet seat dermatitis phylum and genus #############
+# recode the factors for correct view in plots
+# Recode lesional to case 
+sample_data(subset_TSD)$Toilet.seat.dermatitis <- recode(sample_data(subset_TSD)$Toilet.seat.dermatitis, 
+                                                         "Lesional" = "AD cases")
+table(sample_data(subset_TSD)$Lesi.Non.Lesi)
+
+# suggestion easier code plots:
+ps1.rel.t <- microbiome::transform(subset_TSD, "compositional")
+
+# phylum level
+ps1.fam.rel.p <-aggregate_rare(ps1.rel.t, level = "Phylum", detection = 0.005, prevalence = 0.2) 
+#saved plot with 0.2 prev, can also switch to 0.1
+# TSD within cases
+p <- plot_composition(ps1.fam.rel.p,
+                      average_by = "Toilet.seat.dermatitis") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "Toilet seat dermatitis", 
+       y = "Relative abundance",
+       title = "Relative abundance of toilet seat dermatitis in atopic dermatitis at phylum level") +
+  scale_fill_manual("Phylum", values=mycolors) + 
+  theme_bw() +  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+p
+#save plot
+ggsave("relative_abundance_TSD_phylum.png", p, width = 7, height = 6)
+
+# genus level
+ps1.fam.rel.g <-aggregate_rare(ps1.rel.t, level = "Genus", detection = 0.01, prevalence = 0.2)
+# when switching the detection from 0.005 to 0.01, it makes a large difference in plot
+# TSD
+g <- plot_composition(ps1.fam.rel.g,
+                      average_by = "Toilet.seat.dermatitis") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "Toilet.seat.dermatitis", 
+       y = "Relative abundance",
+       title = "Relative abundance of toilet seat dermatitis in atopic dermatitis at genus level") +
+  scale_fill_manual("Genus", values=mycolors) + 
+  theme_bw() +  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+g
+#save plot
+ggsave("relative_abundance_TSD_genus.png", g, width = 7, height = 6)
+
+# 
+ps1.fam.rel.g <-aggregate_rare(ps1.rel.t, level = "Genus", detection = 0.01, prevalence = 0.2)
+# TSD
+g <- plot_composition(ps1.fam.rel.g,
+                      average_by = "Swab.Sites") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "Swab Sites", 
+       y = "Relative abundance",
+       title = "Relative abundance of toilet seat dermatitis according swab sites at genus level") +
+  scale_fill_manual("Genus", values=mycolors) + 
+  theme_bw() +  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+g
+
+
+
+################ Relative abundances cases vs controls, and lesion vs non lesion, swab sites for staphylococcus#############
+####
+# Plot 1: Sample type and AD severity (relative abundance)
+plot_abundance_staph_bar <- function(physeq, title = "", Color = "Species"){  
+  # Melt the phyloseq object into a dataframe
+  mphyseq <- psmelt(physeq)
+  # Normalize to relative abundance (percentage)
+  mphyseq$Abundance <- mphyseq$Abundance / tapply(mphyseq$Abundance, mphyseq$Sample, sum)[mphyseq$Sample]
+  # Generate the bar plot
+  ggplot(
+    data = mphyseq,
+    mapping = aes_string(
+      x     = "Lesi.Non.Lesi", 
+      y     = "Abundance",     
+      fill  = Color              
+    )
+  ) +
+    geom_bar(stat = "identity", position = "stack") + 
+    facet_grid(cols = vars(Severity.SCORAD.)) +  # Facet by AD severity
+    theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank()) +  
+    scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+    theme(legend.position = "right") +
+    scale_fill_discrete(name = "Staphylococcus") +
+    labs(
+      x = "",                    
+      y = "Relative abundance",
+      title = title
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),  
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 10),  
+      axis.text.y = element_text(size = 10),  
+      axis.title = element_text(size = 12)  
+    )
+}
+
+# Plot 2: Swab sites (relative abundance)
+plot_abundance_staph_summary <- function(physeq, title = "", Color = "Species"){  
+  # Melt the phyloseq object into a dataframe
+  mphyseq <- psmelt(physeq)
+  # Normalize to relative abundance (percentage)
+  mphyseq$Abundance <- mphyseq$Abundance / tapply(mphyseq$Abundance, mphyseq$Sample, sum)[mphyseq$Sample]
+  # Generate the bar plot with facets by Swab.Sites
+  ggplot(
+    data = mphyseq,
+    mapping = aes_string(
+      x     = "Lesi.Non.Lesi",  
+      y     = "Abundance",      
+      fill  = Color              
+    )
+  ) +
+    geom_bar(stat = "identity", position = "stack") +  
+    facet_grid(cols = vars(Swab.Sites)) +  # Facet by Swab.Sites
+    theme_bw() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank()) +  
+    scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+    theme(legend.position = "right") +
+    scale_fill_discrete(name = "Staphylococcus") +
+    labs(
+      x = "",                    
+      y = "Relative abundance",
+      title = title
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),  
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 10),  
+      axis.text.y = element_text(size = 10),  
+      axis.title = element_text(size = 12) 
+    )
+}
+
+### Combine the plots
+# Generate the first plot (relative abundance by sample type and AD severity)
+plot1 <- plot_abundance_staph_bar(
+  ps_staph_filtered,
+  title = "Staphylococcus abundance by sample type and AD severity",
+  Color = "Species"
+)
+
+# Generate the second plot (relative abundance by swab sites)
+plot2 <- plot_abundance_staph_summary(
+  ps_staph_filtered,
+  title = "Staphylococcus abundance by swab sites",
+  Color = "Species"
+)
+
+# Combine the plots vertically using cowplot
+combined_plot <- plot_grid(plot1, plot2, ncol = 1, rel_heights = c(1, 1))
+
+# Show the combined plot
+combined_plot
+
+# Save the combined plot
+ggsave("combined_staph_plots_relative_abundance_fin.jpg", combined_plot, width = 10, height = 12, dpi = 300)
