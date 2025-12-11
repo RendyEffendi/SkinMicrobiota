@@ -1,0 +1,231 @@
+library("phyloseq")
+library("dplyr")
+library("ggplot2")
+library("microbiome")
+library("stringr")
+library("fantaxtic")
+library(mice)
+library(tidyr)
+
+#### Load Data ####
+load(Directory/phyloseq_TotalAbundance-SamplePrevalence-flt_tree_ASV-IDs.Robject")
+
+# Couple one of the datasets to phyloseq object to plot alpha diversities
+ps <- readRDS('phyloseq_casecontrol_alpha_fin.rds')
+OTU <- ps@otu_table
+TAX <- ps@tax_table
+
+otu_df <- as.data.frame(OTU)
+otu_df$ASV <- rownames(otu_df)
+Final_tot <- otu_df %>%
+  pivot_longer(-ASV, names_to = "SampleID", values_to = "Count") %>%
+  group_by(SampleID) %>%
+  summarise(TotalAbundance = sum(Count), .groups = "drop")
+#check
+sample_metadata <- data.frame(sample_data(ps))
+Final_tot <- left_join(Final_tot, sample_metadata, by = c("SampleID" = "row.names"))
+Final_tot <- complete(Final_tot, SampleID)
+rownames(Final_tot) <- Final_tot$SampleID
+sampledata <- sample_data(Final_tot)
+sample_names(sampledata) <- rownames(Final_tot)
+physeq_t = merge_phyloseq(ps, sampledata)
+
+###Microbiome package core microbiota function###
+# core members on ASV level
+core_t <- core_members(physeq_t, detection = 0, prevalence = 75/100) 
+# couple it with tax tables to find the ASVs
+TAX_t <- as.data.frame(tax_table(physeq_t))
+core_taxa_t <- TAX_t[core_t, ]
+# make rownames the highest hit and couple with the relative abundances
+# transform phyloseqs to relative abundances and select only core taxa
+# also select per global state
+
+#### ASVs HEATMAPS #### 
+#select phyloseq of core taxa
+pseq.rel.t <- microbiome::transform(physeq_t, "compositional")
+pseq.rel.core.t <- core(pseq.rel.t, detection = 0, prevalence = .75)
+#create phyloseq with absolute abundances with core ASVs
+View(tax_table(pseq.rel.core.t)) #ASVs match with the core members
+core.taxa <- taxa(pseq.rel.core.t)
+core.abundance <- sample_sums(core(pseq.rel.core.t, detection = 0, prevalence = .75)) # total abundance
+# of core bacteria per sample
+# heatmap total population
+colnames(pseq.rel.core.t@tax_table)[1]
+colnames(pseq.rel.core.t@tax_table)[1] <- "Domain"
+pseq.rel.core.t <- microbiome::add_besthit(pseq.rel.core.t, sep = ":")
+head(pseq.rel.core.t@tax_table)
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(1e-2), log10(.2), length = 10), 3)
+total <- microbiome::plot_core(pseq.rel.core.t,
+                                     plot.type = "heatmap",
+                                     colours = rev(RColorBrewer::brewer.pal(8, "RdBu")),
+                                     prevalences = prevalences,
+                                     detections = detections) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+  xlab("Detection Threshold (Relative Abundance (%))") +
+  ylab("ASVs") +
+  ggtitle("Core Microbiota Heatmap total population")
+total
+
+## heatmap with core microbiota per case and control
+#Create 2 phyloseq objects for cases and controls
+sub_case <- subset_samples(physeq_t, Lesi.Non.Lesi == "Lesional")
+sub_control <- subset_samples(physeq_t, Lesi.Non.Lesi == "Controls")
+colnames(sub_case@tax_table)[1]
+colnames(sub_case@tax_table)[1] <- "Domain"
+colnames(sub_control@tax_table)[1]
+colnames(sub_control@tax_table)[1] <- "Domain"
+sub_case <- microbiome::add_besthit(sub_case, sep = ":")
+sub_control <- microbiome::add_besthit(sub_control, sep = ":")
+pseq.rel.t.case <- microbiome::transform(sub_case, "compositional")
+pseq.rel.core.t.case <- core(pseq.rel.t.case, detection = 0, prevalence = .75)
+View(tax_table(pseq.rel.core.t.case)) 
+pseq.rel.t.control <- microbiome::transform(sub_control, "compositional")
+pseq.rel.core.t.control <- core(pseq.rel.t.control, detection = 0, prevalence = .75)
+View(tax_table(pseq.rel.core.t.control)) 
+
+# make the taxa that are different from each other bold
+# compare the asvs from taxa table of cases and controls
+# Extract row names (ASV:GENUS:SPECIES)
+taxa_case <- rownames(tax_table(pseq.rel.core.t.case))
+taxa_control <- rownames(tax_table(pseq.rel.core.t.control))
+# Find common and unique taxa
+common_taxa <- intersect(taxa_case, taxa_control)
+unique_taxa_case <- setdiff(taxa_case, taxa_control)
+unique_taxa_control <- setdiff(taxa_control, taxa_case)
+unique_taxa_combined <- c(unique_taxa_case, unique_taxa_control)
+
+# Custom function to bold specific ASVs in cases
+bold_asvs <- function(asvs) {
+  sapply(asvs, function(asv) {
+    if (asv %in% unique_taxa_case) {
+      return(paste0("**", asv, "**"))
+    } else {
+      return(asv)
+    }
+  })
+}
+
+unique_taxa_case <- trimws(unique_taxa_case)
+print(rownames(tax_table(pseq.rel.core.t.case)))
+
+
+###heatmaps cases and controls
+cases_t <- microbiome::plot_core(pseq.rel.core.t.case,
+                                 plot.type = "heatmap",
+                                 colours = rev(RColorBrewer::brewer.pal(8, "RdBu")),
+                                 prevalences = prevalences,
+                                 detections = detections) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+  scale_y_discrete(labels=c(   "ASV1:Staphylococcus" = expression(bold("ASV1:Staphylococcus")),
+                               "ASV2:Staphylococcus" = expression(underline("ASV2:Staphylococcus")),
+                               "ASV3:Staphylococcus" = expression(underline("ASV3:Staphylococcus")),
+                               "ASV4:Staphylococcus" = expression(underline("ASV4:Staphylococcus")),
+                               "ASV8:Staphylococcus" = expression(underline("ASV8:Staphylococcus")),
+                               "ASV12:Kocuria.palustris" = expression(underline("ASV12:Kocuria.palustris")),
+                               "ASV18:Staphylococcus.hominis" = expression(underline("ASV18:Staphylococcus.hominis")),
+                               "ASV19:Micrococcus" = expression(bold("ASV19:Micrococcus")),
+                               "ASV23:Kocuria.rhizophila" = expression(underline("ASV23:Kocuria.rhizophila")),
+                            parse=TRUE))+
+  xlab("Detection Threshold (Relative Abundance (%))") +
+  ylab("ASVs") +
+  ggtitle("Core Microbiota Heatmap in cases")
+
+controls_t <- microbiome::plot_core(pseq.rel.core.t.control,
+                                    plot.type = "heatmap",
+                                    colours = rev(RColorBrewer::brewer.pal(8, "RdBu")),
+                                    prevalences = prevalences,
+                                    detections = detections) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+  scale_y_discrete(labels=c("ASV2:Staphylococcus" = expression(underline("ASV2:Staphylococcus")),
+                            "ASV3:Staphylococcus" = expression(underline("ASV3:Staphylococcus")),
+                            "ASV4:Staphylococcus" = expression(underline("ASV4:Staphylococcus")),
+                            "ASV6:Staphylococcus.hominis" = expression(bold("ASV6:Staphylococcus.hominis")),
+                            "ASV7:Staphylococcus" = expression(bold("ASV7:Staphylococcus")),
+                            "ASV8:Staphylococcus" = expression(underline("ASV8:Staphylococcus")),
+                            "ASV12:Kocuria.palustris" = expression(underline("ASV12:Kocuria.palustris")),
+                            "ASV14:Staphylococcus" = expression(bold("ASV14:Staphylococcus")),
+                            "ASV15:Staphylococcus.hominis" = expression(bold("ASV15:Staphylococcus.hominis")),
+                            "ASV16:Staphylococcus" = expression(bold("ASV16:Staphylococcus")),
+                            "ASV18:Staphylococcus.hominis" = expression(underline("ASV18:Staphylococcus.hominis")),
+                            "ASV21:Streptococcus" = expression(bold("ASV21:Streptococcus")),
+                            "ASV23:Kocuria.rhizophila" = expression(underline("ASV23:Kocuria.rhizophila")),
+                            "ASV24:Staphylococcus.arlettae" = expression(bold("ASV24:Staphylococcus.arlettae")),
+                            "ASV26:Kocuria.rhizophila" = expression(bold("ASV26:Kocuria.rhizophila")),
+                            "ASV35:Kocuria.rhizophila" = expression(bold("ASV35:Kocuria.rhizophila")),
+                            "ASV60:Staphylococcus" = expression(bold("ASV60:Staphylococcus")),
+                            parse=TRUE))+
+  xlab("Detection Threshold (Relative Abundance (%))") +
+  ylab("ASVs") +
+  ggtitle("Core Microbiota Heatmap in controls") +
+  theme(legend.position = "none") 
+
+library(cowplot)
+combined_plot <- plot_grid(
+  controls_t, cases_t, 
+  labels = c("A", "B"), 
+  ncol = 2,
+  rel_widths = c(0.8,1))
+combined_plot
+# Save the combined plot
+ggsave("combined_heatmaps.png", combined_plot, width = 12, height = 6)
+ggsave("combined_heatmaps.jpg", combined_plot, width = 12, height = 6)
+#heatmaps cases and controls with common asvs borderline and unique for each group in bold
+cases_t <- microbiome::plot_core(pseq.rel.core.t.case,
+                                 plot.type = "heatmap",
+                                 colours = rev(RColorBrewer::brewer.pal(8, "RdBu")),
+                                 prevalences = prevalences,
+                                 detections = detections) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+  scale_y_discrete(labels=c("ASV1:Staphylococcus" = expression(bold("ASV1:Staphylococcus")),
+                            "ASV2:Staphylococcus" = expression(underline("ASV2:Staphylococcus")),
+                            "ASV3:Staphylococcus" = expression(underline("ASV3:Staphylococcus")),
+                            "ASV4:Staphylococcus" = expression(underline("ASV4:Staphylococcus")),
+                            "ASV8:Staphylococcus" = expression(underline("ASV8:Staphylococcus")),
+                            "ASV12:Kocuria.palustris" = expression(underline("ASV12:Kocuria.palustris")),
+                            "ASV18:Staphylococcus.hominis" = expression(underline("ASV18:Staphylococcus.hominis")),
+                            "ASV19:Micrococcus" = expression(bold("ASV19:Micrococcus")),
+                            "ASV23:Kocuria.rhizophila" = expression(underline("ASV23:Kocuria.rhizophila")),
+                            parse=TRUE))+
+  xlab("Detection Threshold (Relative Abundance (%))") +
+  ylab("ASVs") +
+  ggtitle("Core Microbiota Heatmap in cases")
+
+controls_t <- microbiome::plot_core(pseq.rel.core.t.control,
+                                    plot.type = "heatmap",
+                                    colours = rev(RColorBrewer::brewer.pal(8, "RdBu")),
+                                    prevalences = prevalences,
+                                    detections = detections) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+  scale_y_discrete(labels=c("ASV2:Staphylococcus" = expression(underline("ASV2:Staphylococcus")),
+                            "ASV3:Staphylococcus" = expression(underline("ASV3:Staphylococcus")),
+                            "ASV4:Staphylococcus" = expression(underline("ASV4:Staphylococcus")),
+                            "ASV6:Staphylococcus.hominis" = expression(bold("ASV6:Staphylococcus.hominis")),
+                            "ASV7:Staphylococcus" = expression(bold("ASV7:Staphylococcus")),
+                            "ASV8:Staphylococcus" = expression(underline("ASV8:Staphylococcus")),
+                            "ASV12:Kocuria.palustris" = expression(underline("ASV12:Kocuria.palustris")),
+                            "ASV14:Staphylococcus" = expression(bold("ASV14:Staphylococcus")),
+                            "ASV15:Staphylococcus.hominis" = expression(bold("ASV15:Staphylococcus.hominis")),
+                            "ASV16:Staphylococcus" = expression(bold("ASV16:Staphylococcus")),
+                            "ASV18:Staphylococcus.hominis" = expression(underline("ASV18:Staphylococcus.hominis")),
+                            "ASV21:Streptococcus" = expression(bold("ASV21:Streptococcus")),
+                            "ASV23:Kocuria.rhizophila" = expression(underline("ASV23:Kocuria.rhizophila")),
+                            "ASV24:Staphylococcus.arlettae" = expression(bold("ASV24:Staphylococcus.arlettae")),
+                            "ASV26:Kocuria.rhizophila" = expression(bold("ASV26:Kocuria.rhizophila")),
+                            "ASV35:Kocuria.rhizophila" = expression(bold("ASV35:Kocuria.rhizophila")),
+                            "ASV60:Staphylococcus" = expression(bold("ASV60:Staphylococcus")),
+                            parse=TRUE))+
+  xlab("Detection Threshold (Relative Abundance (%))") +
+  ylab("ASVs") +
+  ggtitle("Core Microbiota Heatmap in controls") +
+  theme(legend.position = "none")
+
+library(cowplot)
+combined_plot <- plot_grid(
+  controls_t, cases_t, 
+  labels = c("(A)", "(B)"), 
+  ncol = 2,
+  rel_widths = c(0.8,1))
+combined_plot
+ggsave("combined_heatmaps.png", combined_plot, width = 12, height = 6)
+ggsave("combined_heatmaps_ASV.jpg", combined_plot, width = 12, height = 6)
